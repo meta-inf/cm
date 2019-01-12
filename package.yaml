@@ -27,8 +27,11 @@ dependencies:
 - async
 - stm
 - time
+- process
+- mtl
 - yaml
 - simplessh
+- wai
 - yesod
 - shakespeare
 

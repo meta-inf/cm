@@ -40,48 +40,50 @@ dependencies:
 - yesod
 - shakespeare
 - random
+- unliftio
 - RSA
 
 library:
   source-dirs: src
 
+default-extensions:
+- LambdaCase
+- OverloadedStrings
+- MultiParamTypeClasses
+- FlexibleContexts
+- GeneralizedNewtypeDeriving
+- BlockArguments
+
+_exe-ghc-options: &exe-ghc-options
+- -threaded
+- -rtsopts
+- -with-rtsopts=-N
+
 executables:
+
   sshd-exe:
     main:                Main.hs
     source-dirs:         app/master
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
+    ghc-options:         *exe-ghc-options
     dependencies:
     - sshd
   slave-exe:
     main:                Main.hs
     source-dirs:         app/slave
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
+    ghc-options:         *exe-ghc-options
     dependencies:
     - sshd
   keygen-exe:
     main:                Main.hs
     source-dirs:         app/keygen
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
+    ghc-options:         *exe-ghc-options
     dependencies:
     - sshd
-
 
 tests:
   sshd-test:
     main:                Spec.hs
     source-dirs:         test
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
+    ghc-options:         *exe-ghc-options
     dependencies:
     - sshd

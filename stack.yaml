@@ -8,3 +8,4 @@ extra-deps:
 - yesod-bin-1.4.11
 - RSA-2.3.1
 - katip-0.7.0.0
+- unliftio-0.2.10

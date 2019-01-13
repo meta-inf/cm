@@ -1,20 +1,11 @@
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TypeFamilies               #-}
-{-# LANGUAGE FlexibleInstances          #-}
-{-# LANGUAGE MultiParamTypeClasses      #-}
-{-# LANGUAGE UndecidableInstances       #-}
 
 module LocalRunner where
 
 
 import Control.Exception      (bracket)
 import Control.Monad
-import Control.Monad.Reader
+import Control.Monad.IO.Class
 import Control.Concurrent
 import Control.Concurrent.STM
 import System.Process
@@ -24,7 +15,6 @@ import Data.List              (sortBy)
 import Text.Read              (readMaybe)
 import Text.JSON
 import Katip                  (logTM, Severity(..), showLS, ls)
-import qualified Data.Monoid
 import qualified Codec.Crypto.RSA.Pure     as RSA
 import qualified Data.Text                 as Text
 import qualified Data.ByteString.Char8     as C
@@ -34,7 +24,9 @@ import qualified Network.Wai.Handler.Warp  as Warp
 import qualified Network.HTTP.Types.Status as S
 import qualified Katip                     as K
 
-import Lib (parseNvidiaSMI, GpuInfo (..))
+import App
+import Lib (parseNvidiaSMI)
+import Config (GpuInfo (..))
 import Utils
 import Task
 
@@ -47,54 +39,12 @@ data State = State { workerIds :: [(DeviceId, [(WorkerId, ThreadId)])]
                    , pendingTasks :: [Task]
                    }
 
-data Config = Config { storage :: TVar State
-                     , logNamespace :: K.Namespace
-                     , logContext :: K.LogContexts
-                     , logEnv :: K.LogEnv
-                     , publicKey :: RSA.PublicKey
-                     }
+type LocalApp = App State RSA.PublicKey
 
-newtype LocalApp a = LocalApp { unLocalApp :: ReaderT Config IO a }
-  deriving (Applicative, Functor, Monad, MonadIO, MonadReader Config)
+type LocalConfig = AppConfig State RSA.PublicKey
 
-instance K.Katip LocalApp where
-  getLogEnv = asks logEnv
-  localLogEnv f (LocalApp m) =
-    LocalApp (local (\s -> s { logEnv = f (logEnv s)}) m)
-
-instance K.KatipContext LocalApp where
-  getKatipContext = asks logContext
-  localKatipContext f (LocalApp m) =
-    LocalApp (local (\s -> s { logContext = f (logContext s)}) m)
-  getKatipNamespace = asks logNamespace
-  localKatipNamespace f (LocalApp m) =
-    LocalApp (local (\s -> s { logNamespace = f (logNamespace s)}) m)
-
-
-runLocalApp :: Config -> LocalApp a -> IO a
-runLocalApp c k = runReaderT (unLocalApp k) c
-
-
-toIOAction :: LocalApp a -> LocalApp (IO a)
-toIOAction k = ask `for` \c -> runLocalApp c k
-
-
-liftSTM :: STM a -> LocalApp a
-liftSTM = liftIO . atomically
-
-
-getState :: LocalApp State
-getState = do
-  storage <- asks storage
-  liftSTM $ readTVar storage
-
-
-mutateSt :: (State -> State) -> LocalApp ()
-mutateSt fn = do
-  storage <- asks storage
-  liftSTM $ do
-    st <- readTVar storage
-    writeTVar storage (fn st)
+askKey :: LocalApp RSA.PublicKey
+askKey = askApp
 
 
 execTask :: MonadIO m => Task -> DeviceId -> m ExitCode
@@ -113,8 +63,7 @@ runnerThread devId workerId =
   where
     loop = do
       -- fetch next task
-      storage <- asks storage
-      nextTask <- liftSTM $ do
+      nextTask <- liftSTM $ \storage -> do
         st <- readTVar storage
         let plist = pendingTasks st
         if null plist
@@ -124,12 +73,12 @@ runnerThread devId workerId =
             return $ Just (head plist)
       -- launch
       case nextTask of
-        Nothing -> liftIO (delayBy 1000) >> loop
+        Nothing -> delayBy 1000 >> loop
         Just t  -> do
           $(logTM) InfoS ("Launching task " <> showLS t)
           exc <- execTask t devId
           $(logTM) InfoS ("Task finished, exit code " <> showLS exc)
-          mutateSt $ \st -> newState st t exc
+          mutateState $ \st -> newState st t exc
     -- 
     newState st t exitCode =
       let State{completedTasks=ct, pendingTasks=pt} = st
@@ -174,7 +123,7 @@ adjustResLimit nDev nWorkerPerDev = do
     return (d, nth)
   -- Log changes
   let workers = oldWorkers ++ newWorkers
-  mutateSt $ \st -> st { workerIds = workers }
+  mutateState $ \st -> st { workerIds = workers }
   $(logTM) InfoS ("resource limit adjusted to " <> showLS (nDev, nWorkerPerDev))
 
   where
@@ -182,7 +131,7 @@ adjustResLimit nDev nWorkerPerDev = do
       forM (drop nKeep tList) (liftIO . killThread . snd)
       return (devId, take nKeep tList)
     newThreadList devId workerIdRange = forM workerIdRange $ \wId -> do
-      action <- toIOAction $ runnerThread devId wId
+      action <- toIO $ runnerThread devId wId
       tId <- liftIO (forkIO action)
       return (wId, tId)
 
@@ -198,8 +147,8 @@ reportStatus st = showJSObject jval ""
 --  wlist = map (\(i, lst) -> (i::Int, length lst)) (workerIds st)
 
 
-webApp :: Config -> Wai.Application
-webApp cfg req _respond = runLocalApp cfg $ do
+webApp :: LocalConfig -> Wai.Application
+webApp cfg req _respond = runApp cfg $ do
   reqBody <- liftIO $ getBody req C.empty
   let reqPath = map Text.unpack (Wai.pathInfo req)
   $(logTM) InfoS ("request: " <> showLS reqPath <> K.ls reqBody)
@@ -232,12 +181,12 @@ webApp cfg req _respond = runLocalApp cfg $ do
 
     doLaunch reqBody =
       do
-        verify <- asks publicKey `for` RSA.verify
+        verify <- askKey `for` RSA.verify
         case parseTaskGroup reqBody verify of
           Left err -> packStr $ "Error parsing request body: " ++ err
           Right ts -> do
             $(logTM) InfoS ("Launching " <> showLS (length ts) <> " tasks")
-            mutateSt $ \st -> st { pendingTasks = (pendingTasks st) ++ ts }
+            mutateState $ \st -> st { pendingTasks = (pendingTasks st) ++ ts }
             packStr "Tasks enqueued"
 
 
@@ -249,14 +198,8 @@ launchRunner = do
   let mkLogEnv =
         K.registerScribe "stdout" handleScribe K.defaultScribeSettings =<<
           K.initLogEnv "LocalRunner" "devel"
-  bracket mkLogEnv K.closeScribes $ \le -> do
-    let cfg = Config { logEnv = le
-                     , logContext = mempty
-                     , logNamespace = Data.Monoid.mempty
-                     , storage = store
-                     , publicKey = pkey
-                     }
-    Warp.run 3333 $ webApp cfg
+  bracket mkLogEnv K.closeScribes $ \le -> 
+    Warp.run 3333 $ webApp (initConfig le store pkey)
   where
     initState = State { workerIds = []
                       , completedTasks = []

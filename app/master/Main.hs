@@ -1,5 +1,3 @@
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes       #-}
 {-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE TemplateHaskell   #-}
@@ -15,7 +13,8 @@ import Data.List              (sortBy)
 import Yesod
 import Text.Hamlet            (hamletFile)
 import Utils
-import qualified Lib as L
+
+import qualified Lib    as L
 import qualified Config as C
 
 
@@ -61,7 +60,7 @@ getHomeR = defaultLayout $ do
                         \ (comm error at #{L.queryTime nodeResult}: #{err})
                       $of _
                 $case (snd gpu)
-                  $of L.GpuInfo gId name fmem util
+                  $of C.GpuInfo gId name fmem util
                     <td> #{gId}
                     <td> #{name}
                     <td> #{fmem}
@@ -72,7 +71,7 @@ getHomeR = defaultLayout $ do
   |]
   where
     listOfRes r = case (L.lastSuccessRes r) of
-                       [] -> [L.GpuInfo (-1) "undefined" 0 0]
+                       [] -> [C.GpuInfo (-1) "undefined" 0 0]
                        _  -> L.lastSuccessRes r
     enumerate = zipWith (,) [1..]
     numGPUs = length . listOfRes
@@ -80,8 +79,6 @@ getHomeR = defaultLayout $ do
 
 main :: IO ()
 main = do
-  cfg <- C.loadConfig "./assets/config.yaml"
-  qstate <- newTVarIO (L.initState (C.nodes cfg))
-  forkIO $ L.queryThread 500 (C.nodes cfg) (C.credential cfg) qstate
+  qstate <- L.launchMasterThreads "./assets/config.yaml"
   warp 9801 App { .. }
 

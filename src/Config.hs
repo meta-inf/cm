@@ -1,8 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Config
-  ( RemoteConfig (..), loadConfig ) where
+module Config where
 
 
 import System.FilePath
@@ -11,10 +10,24 @@ import qualified Data.Yaml as Y
 import Data.Yaml (FromJSON(..), (.:))
 
 import Utils
-import Lib
 
 
-data RemoteConfig = RemoteConfig { knownHosts :: FilePath
+data GpuInfo = GpuInfo Int String Float Float deriving (Show)
+
+
+data Node = MkNode { nodeName :: String
+                   , hostName :: String
+                   , port :: Integer
+                   , userName :: String
+                   } deriving (Show)
+
+
+data Credential = MkCredential { publicKey :: String
+                               , privateKey :: String
+                               } deriving (Show)
+
+
+data MasterConfig = MasterConfig { knownHosts :: FilePath
                                  , credential :: Credential
                                  , nodes      :: [Node]
                                  } deriving (Show)
@@ -34,15 +47,15 @@ instance FromJSON Node where
     v .: "user_name"
   parseJSON _ = fail "expected object for Node"
 
-instance FromJSON RemoteConfig where
+instance FromJSON MasterConfig where
   parseJSON (Y.Object v) =
-    RemoteConfig <$>
+    MasterConfig <$>
       v .: "known_hosts" <*>
       v .: "credential" <*>
       v .: "nodes"
-  parseJSON _ = fail "expected object for RemoteConfig"
+  parseJSON _ = fail "expected object for MasterConfig"
 
 
-loadConfig :: FilePath -> IO RemoteConfig
+loadConfig :: FilePath -> IO MasterConfig
 loadConfig path = Y.decodeFileThrow path
 

@@ -25,8 +25,10 @@ import Text.Read              (readMaybe)
 import Text.JSON
 import Katip                  (logTM, Severity(..), showLS, ls)
 import qualified Data.Monoid
+import qualified Codec.Crypto.RSA.Pure     as RSA
 import qualified Data.Text                 as Text
 import qualified Data.ByteString.Char8     as C
+import qualified Data.ByteString.Lazy      as B
 import qualified Network.Wai               as Wai
 import qualified Network.Wai.Handler.Warp  as Warp
 import qualified Network.HTTP.Types.Status as S
@@ -34,17 +36,7 @@ import qualified Katip                     as K
 
 import Lib (parseNvidiaSMI, GpuInfo (..))
 import Utils
-
-
-data Task = Task { command  :: String
-                 , args     :: [String]
-                 , workDir  :: FilePath
-                 , retryCnt :: Int
-                 }
-
-
-instance Show Task where
-  show (Task cmd args _ rc) = "[" ++ (show rc) ++ "] " ++ cmd ++ (unwords args)
+import Task
 
 
 type DeviceId = Int
@@ -54,10 +46,12 @@ data State = State { workerIds :: [(DeviceId, [(WorkerId, ThreadId)])]
                    , completedTasks :: [(Task, ExitCode)]
                    , pendingTasks :: [Task]
                    }
+
 data Config = Config { storage :: TVar State
                      , logNamespace :: K.Namespace
                      , logContext :: K.LogContexts
                      , logEnv :: K.LogEnv
+                     , publicKey :: RSA.PublicKey
                      }
 
 newtype LocalApp a = LocalApp { unLocalApp :: ReaderT Config IO a }
@@ -80,16 +74,20 @@ instance K.KatipContext LocalApp where
 runLocalApp :: Config -> LocalApp a -> IO a
 runLocalApp c k = runReaderT (unLocalApp k) c
 
+
 toIOAction :: LocalApp a -> LocalApp (IO a)
 toIOAction k = ask `for` \c -> runLocalApp c k
 
+
 liftSTM :: STM a -> LocalApp a
 liftSTM = liftIO . atomically
+
 
 getState :: LocalApp State
 getState = do
   storage <- asks storage
   liftSTM $ readTVar storage
+
 
 mutateSt :: (State -> State) -> LocalApp ()
 mutateSt fn = do
@@ -188,6 +186,7 @@ adjustResLimit nDev nWorkerPerDev = do
       tId <- liftIO (forkIO action)
       return (wId, tId)
 
+
 reportStatus :: State -> String
 reportStatus st = showJSObject jval ""
   where
@@ -195,7 +194,7 @@ reportStatus st = showJSObject jval ""
       ("pending_tasks", showJSON $ length (pendingTasks st)),
       ("completed_tasks", showJSON $ length (completedTasks st)),
       ("workers", JSArray (map (showJSON . print_) $ workerIds st))]
-    print_ (a, ls) = (a, map (\(x,y)->(x::Int, show y)) ls)
+    print_ (a, ls) = (a, map (\(x,y)->(x, show y)) ls)
 --  wlist = map (\(i, lst) -> (i::Int, length lst)) (workerIds st)
 
 
@@ -207,28 +206,45 @@ webApp cfg req _respond = runLocalApp cfg $ do
   responseText <- case reqPath of
                     ["report"]      -> doReport
                     "adjust":a:b:[] -> doAdjust a b
+                    ["launch"]      -> doLaunch $ cStrToBStr reqBody
                     _               -> pure Nothing
   case responseText of
     Nothing -> respond $ Wai.responseLBS S.status404 [] "invalid command"
-    Just t  -> respond $ Wai.responseLBS S.status200 [] (toLazyByteString t)
+    Just t  -> respond $ Wai.responseLBS S.status200 [] (cStrToBStr t)
 
   where
+
     respond = liftIO . _respond
+    packStr = pure . Just . C.pack
+
     getBody req acc = do
       body <- Wai.requestBody req
       if C.null body then return acc
                      else getBody req (C.append acc body)
+
     doReport = Just . C.pack . reportStatus <$> getState
+
     doAdjust argA argB = 
       case (readMaybe argA, readMaybe argB) of
         (Just a, Just b) | a > 0 &&  b > 0 ->
           adjustResLimit a b >> pure (Just "done") -- handle exception here
         _ -> pure Nothing
 
+    doLaunch reqBody =
+      do
+        verify <- asks publicKey `for` RSA.verify
+        case parseTaskGroup reqBody verify of
+          Left err -> packStr $ "Error parsing request body: " ++ err
+          Right ts -> do
+            $(logTM) InfoS ("Launching " <> showLS (length ts) <> " tasks")
+            mutateSt $ \st -> st { pendingTasks = (pendingTasks st) ++ ts }
+            packStr "Tasks enqueued"
+
 
 launchRunner :: IO ()
 launchRunner = do
   store <- newTVarIO initState
+  pkey <- read . bStrToString <$> B.readFile "./assets/pub.key"
   handleScribe <- K.mkHandleScribe (K.ColorLog True) stdout K.DebugS K.V1
   let mkLogEnv =
         K.registerScribe "stdout" handleScribe K.defaultScribeSettings =<<
@@ -238,6 +254,7 @@ launchRunner = do
                      , logContext = mempty
                      , logNamespace = Data.Monoid.mempty
                      , storage = store
+                     , publicKey = pkey
                      }
     Warp.run 3333 $ webApp cfg
   where
@@ -245,3 +262,4 @@ launchRunner = do
                       , completedTasks = []
                       , pendingTasks = []
                       }
+

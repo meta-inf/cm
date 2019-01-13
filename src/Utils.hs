@@ -26,5 +26,8 @@ now = do
   s <- getZonedTime
   return ((formatTime defaultTimeLocale rfc822DateFormat s) :: TimeStr)
 
-toLazyByteString :: C.ByteString -> B.ByteString
-toLazyByteString = B.pack . map BS.c2w . C.unpack
+cStrToBStr :: C.ByteString -> B.ByteString
+cStrToBStr = B.pack . map BS.c2w . C.unpack
+
+bStrToString :: B.ByteString -> String
+bStrToString = map BS.w2c . B.unpack

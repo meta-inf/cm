@@ -40,6 +40,7 @@ packages:
 extra-deps:
 - /home/if/playground/simplessh
 - yesod-bin-1.4.11
+- katip-0.7.0.0
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

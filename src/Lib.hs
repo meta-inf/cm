@@ -3,7 +3,7 @@
 
 module Lib
   ( GpuInfo (..), Node (..), Credential (..), QueryStatus (..),
-    QueryResult (..), ClusterState, queryThread, initState
+    QueryResult (..), ClusterState, queryThread, initState, parseNvidiaSMI
   ) where
 
 

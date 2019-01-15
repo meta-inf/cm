@@ -1,60 +1,71 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE DeriveGeneric   #-}
 
-module Task ( Task(..), parseTaskGroup ) where
-
-
-import Text.JSON
-import Data.ByteString.Lazy (ByteString, unpack)
-
-import Utils
+module Task (
+  MasterCommand(..), Task(..), SlaveStatus (SlaveStatus), parseCommand ) where
 
 
-data Task = Task { command  :: String
-                 , args     :: [String]
-                 , workDir  :: FilePath
-                 , retryCnt :: Int
-                 }
+import           Data.Aeson
+import           Data.ByteString.Lazy (ByteString, unpack)
+import           Data.String.Conv     (toS)
+import           Data.Text            (Text)
+import           GHC.Generics
+import           System.Exit          (ExitCode (..))
+import           Utils
+import qualified Data.ByteString.Base64.Lazy as Base64
 
+
+data Task = Task
+  { command  :: String
+  , args     :: [String]
+  , workDir  :: FilePath
+  , retryCnt :: Int
+  } deriving (Generic)
+
+instance ToJSON Task
+
+instance FromJSON Task
 
 instance Show Task where
   show (Task cmd args _ rc) = "[" ++ (show rc) ++ "] " ++ cmd ++ (unwords args)
 
 
-get :: [(String, a)] -> String -> Result a
-get arr k = case lookup k arr of
-              Nothing -> Error ("Cannot find key " ++ k)
-              Just val -> Ok val
+data MasterCommand = LaunchTask [Task]
+                   | ReportStatus
+                   | AdjustResLimit Int Int
+                   deriving (Show, Generic)
+
+instance ToJSON MasterCommand
+
+instance FromJSON MasterCommand
 
 
-instance JSON Task where
-  readJSON (JSObject jv) =
-    let mp = fromJSObject jv
-     in do
-       a <- get mp "command" >>= readJSON :: Result JSString
-       args <- get mp "args" >>= readJSON :: Result [JSString]
-       workDir <- get mp "work_dir" >>= readJSON :: Result JSString
-       return $ Task { command = fromJSString a
-                     , args = map fromJSString args
-                     , workDir = (fromJSString workDir) :: FilePath
-                     , retryCnt = 2 -- TODO magic number
-                     }
-  readJSON _ = Error "need a JSObject for Task"
-  showJSON t = JSObject $ toJSObject [
-    ("command", showJSON $ command t),
-    ("args", showJSON $ args t),
-    ("work_dir", showJSON (workDir t :: String))]
+data SlaveStatus = SlaveStatus
+  { pendingTasks :: [Task]
+  , succeededTasks :: [Task]
+  , failedTasks :: [Task]
+  , workers :: [(Int, String)]
+  } deriving (Generic)
+
+instance ToJSON SlaveStatus
+
+instance FromJSON SlaveStatus
 
 
-parseTaskGroup :: Show e
-               => ByteString -- request body
-               -> (ByteString -> ByteString -> Either e Bool) -- signature verifier
-               -> Either String [Task]
-parseTaskGroup req verify =
-  case decode (bStrToString req) :: Result [ByteString] of
-    Error e -> Left e
-    Ok val | length val /= 2 -> Left "expecting list of 2 strings in request"
-    Ok [str, sig] -> case verify str sig of
-                       Left e -> Left $ show e
-                       Right False -> Left "illegal signature"
-                       Right True -> resultToEither $ decode (bStrToString str)
+parseCommand :: Show e
+             => ByteString -- request body
+             -> (ByteString -> ByteString -> Either e Bool) -- signature verifier
+             -> Either String MasterCommand
+parseCommand req verify =
+  case (decode req) :: Maybe (Text, Text) of
+    Nothing -> Left "decode error"
+    Just (str, sig) -> 
+      let str' = toS str
+          sig' = Base64.decodeLenient (toS sig)
+       in case verify str' sig' of
+            Left e -> Left $ show e
+            Right False -> Left "illegal signature"
+            Right True -> case decode str' of
+                            Nothing -> Left "decode failed"
+                            Just ts -> Right ts
 

@@ -1,13 +1,14 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Config where
 
 
-import System.FilePath
+import           Data.Yaml       (FromJSON (..), (.:))
+import           System.FilePath
+import qualified Codec.Crypto.RSA.Pure as RSA
 import qualified Data.ByteString.Char8 as B
-import qualified Data.Yaml as Y
-import Data.Yaml (FromJSON(..), (.:))
+import qualified Data.Yaml             as Y
 
 import Utils
 
@@ -27,10 +28,12 @@ data Credential = MkCredential { publicKey :: String
                                } deriving (Show)
 
 
-data MasterConfig = MasterConfig { knownHosts :: FilePath
-                                 , credential :: Credential
-                                 , nodes      :: [Node]
-                                 } deriving (Show)
+data MasterConfig = MasterConfig 
+  { knownHosts :: FilePath
+  , credential :: Credential
+  , nodes      :: [Node]
+  , signPKey   :: FilePath
+  } deriving (Show)
 
 
 instance FromJSON Credential where
@@ -52,7 +55,8 @@ instance FromJSON MasterConfig where
     MasterConfig <$>
       v .: "known_hosts" <*>
       v .: "credential" <*>
-      v .: "nodes"
+      v .: "nodes" <*>
+      v .: "private_key_forsign"
   parseJSON _ = fail "expected object for MasterConfig"
 
 

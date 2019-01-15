@@ -30,9 +30,10 @@ dependencies:
 - process
 - mtl
 - yaml
-- json
+- aeson
 - simplessh
 - wai
+- wreq
 - http-types
 - crypto-api
 - warp
@@ -41,7 +42,11 @@ dependencies:
 - shakespeare
 - random
 - unliftio
+- unix
 - RSA
+- lens
+- string-conv
+- base64-bytestring
 
 library:
   source-dirs: src

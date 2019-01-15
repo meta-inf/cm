@@ -3,41 +3,44 @@
 module LocalRunner where
 
 
-import Control.Exception      (bracket)
-import Control.Monad
-import Control.Monad.IO.Class
-import Control.Concurrent
-import Control.Concurrent.STM
-import System.Process
-import System.Exit            (ExitCode(..))
-import System.IO              (stdout)
-import Data.List              (sortBy)
-import Text.Read              (readMaybe)
-import Text.JSON
-import Katip                  (logTM, Severity(..), showLS, ls)
+import           Control.Concurrent
+import           Control.Concurrent.STM
+import           Control.Exception      (bracket)
+import           Control.Monad
+import           Control.Monad.IO.Class
+import           Data.Aeson
+import           Data.List              (sortBy)
+import           Data.String.Conv       (toS)
+import           Katip                  (Severity (..), logTM, ls, showLS)
+import           System.Exit            (ExitCode (..))
+import           System.IO              (stdout)
+import           System.Process
+import           Text.Read              (readMaybe)
+
 import qualified Codec.Crypto.RSA.Pure     as RSA
-import qualified Data.Text                 as Text
 import qualified Data.ByteString.Char8     as C
 import qualified Data.ByteString.Lazy      as B
+import qualified Data.Text                 as Text
+import qualified Katip                     as K
+import qualified Network.HTTP.Types.Status as S
 import qualified Network.Wai               as Wai
 import qualified Network.Wai.Handler.Warp  as Warp
-import qualified Network.HTTP.Types.Status as S
-import qualified Katip                     as K
 
-import App
-import Lib (parseNvidiaSMI)
-import Config (GpuInfo (..))
-import Utils
-import Task
+import           App
+import           Config (GpuInfo (..))
+import           Lib    (parseNvidiaSMI)
+import           Task
+import           Utils
 
 
 type DeviceId = Int
 type WorkerId = Int
 
-data State = State { workerIds :: [(DeviceId, [(WorkerId, ThreadId)])]
-                   , completedTasks :: [(Task, ExitCode)]
-                   , pendingTasks :: [Task]
-                   }
+data State = State
+  { workerIds      :: [(DeviceId, [(WorkerId, ThreadId)])]
+  , completedTasks :: [(Task, ExitCode)]
+  , pendingTasks   :: [Task]
+  }
 
 type LocalApp = App State RSA.PublicKey
 
@@ -136,58 +139,50 @@ adjustResLimit nDev nWorkerPerDev = do
       return (wId, tId)
 
 
-reportStatus :: State -> String
-reportStatus st = showJSObject jval ""
+reportStatus :: State -> B.ByteString
+reportStatus st = encode $ SlaveStatus (pendingTasks st) (k su) (k fa) th
   where
-    jval = toJSObject [
-      ("pending_tasks", showJSON $ length (pendingTasks st)),
-      ("completed_tasks", showJSON $ length (completedTasks st)),
-      ("workers", JSArray (map (showJSON . print_) $ workerIds st))]
-    print_ (a, ls) = (a, map (\(x,y)->(x, show y)) ls)
---  wlist = map (\(i, lst) -> (i::Int, length lst)) (workerIds st)
+    k = map fst
+    (fa, su) = break (\(_, t) -> t == ExitSuccess) (completedTasks st)
+    th = [(i, show j) | (i, j) <- workerIds st]
 
 
 webApp :: LocalConfig -> Wai.Application
 webApp cfg req _respond = runApp cfg $ do
-  reqBody <- liftIO $ getBody req C.empty
+  reqBody' <- liftIO $ getBody req C.empty
+  let reqBody = toS reqBody' -- we've gone beyond GHC's capability
   let reqPath = map Text.unpack (Wai.pathInfo req)
-  $(logTM) InfoS ("request: " <> showLS reqPath <> K.ls reqBody)
-  responseText <- case reqPath of
-                    ["report"]      -> doReport
-                    "adjust":a:b:[] -> doAdjust a b
-                    ["launch"]      -> doLaunch $ cStrToBStr reqBody
-                    _               -> pure Nothing
-  case responseText of
-    Nothing -> respond $ Wai.responseLBS S.status404 [] "invalid command"
-    Just t  -> respond $ Wai.responseLBS S.status200 [] (cStrToBStr t)
+
+  $(logTM) InfoS "request received"
+
+  verify <- askKey `for` RSA.verify
+  ret <- case parseCommand reqBody verify of
+    Left err -> pure $ Left $ "parse failed" ++ err
+    Right ReportStatus -> doReport
+    Right (AdjustResLimit a b) -> doAdjust a b
+    Right (LaunchTask ts) -> doLaunch ts
+  
+  case ret of
+    Left e -> respond $ 
+      Wai.responseLBS S.status404 [] $ toS ("invalid command: " ++ e)
+    Right resp -> respond $ Wai.responseLBS S.status200 [] (cStrToBStr resp)
 
   where
-
     respond = liftIO . _respond
-    packStr = pure . Just . C.pack
-
+    packStr = pure . Right . C.pack
     getBody req acc = do
       body <- Wai.requestBody req
       if C.null body then return acc
                      else getBody req (C.append acc body)
-
-    doReport = Just . C.pack . reportStatus <$> getState
-
-    doAdjust argA argB = 
-      case (readMaybe argA, readMaybe argB) of
-        (Just a, Just b) | a > 0 &&  b > 0 ->
-          adjustResLimit a b >> pure (Just "done") -- handle exception here
-        _ -> pure Nothing
-
-    doLaunch reqBody =
-      do
-        verify <- askKey `for` RSA.verify
-        case parseTaskGroup reqBody verify of
-          Left err -> packStr $ "Error parsing request body: " ++ err
-          Right ts -> do
-            $(logTM) InfoS ("Launching " <> showLS (length ts) <> " tasks")
-            mutateState $ \st -> st { pendingTasks = (pendingTasks st) ++ ts }
-            packStr "Tasks enqueued"
+    doReport = Right . toS . reportStatus <$> getState
+    doAdjust a b =
+      if a < 0 || b < 0
+         then pure (Left "invalid command")
+         else adjustResLimit a b >> pure (Right "done") -- handle exception here
+    doLaunch tasks = do
+      $(logTM) InfoS ("Launching " <> showLS (length tasks) <> " tasks")
+      mutateState $ \st -> st { pendingTasks = (pendingTasks st) ++ tasks }
+      packStr "Tasks enqueued"
 
 
 launchRunner :: IO ()
@@ -205,4 +200,3 @@ launchRunner = do
                       , completedTasks = []
                       , pendingTasks = []
                       }
-

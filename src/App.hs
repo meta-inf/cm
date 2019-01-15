@@ -4,12 +4,12 @@ module App
   ) where
 
 
-import Control.Monad
-import Control.Monad.Reader
-import Control.Concurrent
-import Control.Concurrent.STM
+import           Control.Concurrent
+import           Control.Concurrent.STM
+import           Control.Monad
+import           Control.Monad.Reader
 import qualified Data.Monoid
-import qualified Katip                as K
+import qualified Katip       as K
 
 import Utils
 
@@ -75,6 +75,7 @@ asksApp :: (t1 -> t2) -> App t0 t1 t2
 asksApp sel = asks config `for` sel
 
 
+initConfig :: K.LogEnv -> TVar a -> b -> AppConfig a b
 initConfig le st cfg = AppConfig { logEnv = le
                                  , logContext = mempty
                                  , logNamespace = Data.Monoid.mempty

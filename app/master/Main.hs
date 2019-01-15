@@ -1,21 +1,20 @@
-{-# LANGUAGE QuasiQuotes       #-}
-{-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE TemplateHaskell   #-}
-{-# LANGUAGE TypeFamilies      #-}
-{-# LANGUAGE ViewPatterns      #-}
+{-# LANGUAGE QuasiQuotes     #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies    #-}
 
 module Main where
 
-import Control.Monad
-import Control.Concurrent     (forkIO, threadDelay)
-import Control.Concurrent.STM
-import Data.List              (sortBy)
-import Yesod
-import Text.Hamlet            (hamletFile)
-import Utils
+import           Control.Concurrent     (forkIO, threadDelay)
+import           Control.Concurrent.STM
+import           Control.Monad
+import           Data.List              (sortBy)
+import           Text.Hamlet            (hamletFile)
+import           Utils
+import           Yesod
 
-import qualified Lib    as L
-import qualified Config as C
+import qualified Config                 as C
+import qualified Lib                    as L
 
 
 data App = App

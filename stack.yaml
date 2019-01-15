@@ -9,3 +9,5 @@ extra-deps:
 - RSA-2.3.1
 - katip-0.7.0.0
 - unliftio-0.2.10
+- wreq-0.5.3.1
+- string-conv-0.1.2

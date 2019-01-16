@@ -132,33 +132,34 @@ data SlaveCheckResult = OutdatedSlaveRunning
 checkIfSlaveOn :: Node -> MasterApp SlaveCheckResult
 checkIfSlaveOn nd = do
   lhr <- liftIO (readProcess "sha1sum" [local_path] "")
-  let localHash = toS $ head (words lhr)
+  let localHash = head (words lhr)
   sshret <- execOn nd $ \sess -> do
     r1 <- execCommand sess (
       printf "(sha1sum %s | awk '{print $1}') || echo \"nothing\"" remote_path)
     r2 <- execCommand sess ("ps -ux | grep -v grep | grep " ++ slave_name)
     -- TODO let slave save port there
     port <- parsePort sess
+    let remoteHash = head $ words $ toS $ resultOut r1
     if resultExit r2 == ExitSuccess
-       then if resultOut r1 /= localHash
+       then if remoteHash /= localHash
                then return OutdatedSlaveRunning
                else return port
        else do
-         when (resultOut r1 /= localHash) do
+         when (remoteHash /= localHash) do
            -- upload the good slave
            execCommand sess "mkdir -p ~/slave/assets"
-           sendFile sess 0o700 remote_path local_path
-           sendFile sess 0o700 "~/slave/assets/pub.key" "./assets/pub.key"
+           sendFile sess 0o700 local_path remote_path
+           sendFile sess 0o600 "./assets/pub.key" "slave/assets/pub.key" 
            pure ()
          -- launch it
-         r <- execCommand sess ("nohup " ++ remote_path ++ " &")
+         r <- execCommand sess ("nohup " ++ remote_path ++ " >/tmp/slave.log 2>&1 &")
          -- TODO should wait until port number is announced
          case resultExit r of
            ExitSuccess -> parsePort sess
            ExitFailure c -> 
              return $ CheckErr ("slave launch failed: " ++ show r)
   return $ case sshret of
-             Left e -> CheckErr ("ssh err" ++ show e)
+             Left e -> CheckErr ("ssh err: " ++ show e)
              Right v -> v
   where
     parsePort sess = return $ CheckSuccess 3333 {- do
@@ -171,7 +172,7 @@ checkIfSlaveOn nd = do
             Just p -> CheckSuccess p -}
     slave_name = "slave-exe-x86_64.AppImage" :: String
     local_path = "./assets/" ++ slave_name
-    remote_path = "~/slave/" ++ slave_name
+    remote_path = "slave/" ++ slave_name
 
 
 dispatchCommandTo 

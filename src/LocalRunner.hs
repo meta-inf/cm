@@ -5,17 +5,19 @@ module LocalRunner where
 
 import           Control.Concurrent
 import           Control.Concurrent.STM
-import           Control.Exception      (bracket)
+import           Control.Exception         (bracket)
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.Aeson
-import           Data.List              (sortBy)
-import           Data.String.Conv       (toS)
-import           Katip                  (Severity (..), logTM, ls, showLS)
-import           System.Exit            (ExitCode (..))
-import           System.IO              (stdout)
+import           Data.List                 (sortBy)
+import           Data.String.Conv          (toS)
+import           Katip                     (Severity (..), logTM, ls, showLS)
+import           System.Environment        (getExecutablePath)
+import           System.Exit               (ExitCode (..))
+import           System.FilePath.Posix     (takeDirectory, (</>))
+import           System.IO                 (stdout)
 import           System.Process
-import           Text.Read              (readMaybe)
+import           Text.Read                 (readMaybe)
 
 import qualified Codec.Crypto.RSA.Pure     as RSA
 import qualified Data.ByteString.Char8     as C
@@ -188,7 +190,9 @@ webApp cfg req _respond = runApp cfg $ do
 launchRunner :: IO ()
 launchRunner = do
   store <- newTVarIO initState
-  pkey <- read . bStrToString <$> B.readFile "./assets/pub.key"
+  myPath <- getExecutablePath
+  let pkp = (takeDirectory myPath) </> "assets/pub.key"
+  pkey <- read . bStrToString <$> B.readFile pkp
   handleScribe <- K.mkHandleScribe (K.ColorLog True) stdout K.DebugS K.V1
   let mkLogEnv =
         K.registerScribe "stdout" handleScribe K.defaultScribeSettings =<<

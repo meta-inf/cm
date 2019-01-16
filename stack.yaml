@@ -4,7 +4,7 @@ packages:
 - .
 
 extra-deps:
-- /home/if/playground/simplessh
+- ../simplessh
 - yesod-bin-1.4.11
 - RSA-2.3.1
 - katip-0.7.0.0

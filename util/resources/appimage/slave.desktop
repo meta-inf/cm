@@ -1,0 +1,6 @@
+[Desktop Entry]
+Terminal=true
+Exec=slave-exe
+Name=slave-exe
+Icon=slave
+Type=Application

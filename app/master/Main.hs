@@ -12,7 +12,6 @@ import           Data.List              (sortBy)
 import           Text.Hamlet            (hamletFile)
 import           Utils
 import           Yesod
-
 import qualified Config                 as C
 import qualified Lib                    as L
 

@@ -142,8 +142,9 @@ dispatchCommandTo nd mc = do
     send str = do
       path <- liftIO $ putInTemp str
       liftIO $ putStrLn curl
-      execOn nd $ \s -> 
-        (sendFile s 0o600 path "/tmp/last.cmd.txt" >> execCommand s curl)
+      execOn nd $ \s -> do
+        sendFile s 0o600 path "/tmp/last.cmd.txt"
+        execCommand s curl
 
     curl = "curl http://localhost:3333/ \
            \--header \"Content-type: application/json\" \

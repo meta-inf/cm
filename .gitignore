@@ -2,3 +2,5 @@
 sshd.cabal
 assets/
 *~
+AppDir*
+*.AppImage

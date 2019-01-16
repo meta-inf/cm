@@ -12,7 +12,7 @@ import           Data.Aeson
 import           Data.List                 (sortBy)
 import           Data.String.Conv          (toS)
 import           Katip                     (Severity (..), logTM, ls, showLS)
-import           System.Environment        (getExecutablePath)
+import           System.Directory          (getHomeDirectory)
 import           System.Exit               (ExitCode (..))
 import           System.FilePath.Posix     (takeDirectory, (</>))
 import           System.IO                 (stdout)
@@ -190,8 +190,8 @@ webApp cfg req _respond = runApp cfg $ do
 launchRunner :: IO ()
 launchRunner = do
   store <- newTVarIO initState
-  myPath <- getExecutablePath
-  let pkp = (takeDirectory myPath) </> "assets/pub.key"
+  homePath <- getHomeDirectory
+  let pkp = homePath </> "slave/assets/pub.key"
   pkey <- read . bStrToString <$> B.readFile pkp
   handleScribe <- K.mkHandleScribe (K.ColorLog True) stdout K.DebugS K.V1
   let mkLogEnv =

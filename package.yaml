@@ -46,6 +46,7 @@ dependencies:
 - RSA
 - lens
 - string-conv
+- directory
 - base64-bytestring
 
 library:

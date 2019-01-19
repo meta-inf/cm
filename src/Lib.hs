@@ -299,22 +299,23 @@ implementPrereq logName nodes (SyncData local remote) = runExceptT do
 --
 implementPrereq logName nodes (GitRepoIn local remoteDir commit) = runExceptT do
   -- tar our repo
-  let tarOp = withTempDir $ \fp -> do
-        readProcess "git" ["clone", local, fp] ""
-        (ef, h) <- Temp.mkstemps "/tmp/sshd-repo" ".tgz"
+  let tarOp = withTempDir $ \dirp -> do
+        readProcess "git" ["clone", local, dirp] ""
+        (tgzp, h) <- Temp.mkstemps "/tmp/sshd-repo" ".tgz"
         hClose h
         let prc = (Proc.shell ("git checkout " ++ commit)) {
-            Proc.cwd = Just "/tmp/sshd-repo" }
+            Proc.cwd = Just dirp }
         Proc.readCreateProcess prc ""
-        readProcess "tar" ["zcvf", ef, fp] ""
-        return (Right ef)
+        readProcess "tar" ["zcvf", tgzp, "-C", dirp, "."] ""
+        return (Right tgzp)
   tarPath' <- liftIO $
     catch tarOp (\e -> (pure $ Left $ "Tar failed: " ++ (show (e :: IOError))))
   tarPath <- liftEither tarPath'
   -- copy tarball
   let remoteTarPath = "/tmp" </> (takeFileName tarPath)
       remoteCmd = 
-        printf "rm -rf %s && tar zxvf %s %s" remoteDir remoteTarPath remoteDir
+        printf "rm -rf %s && mkdir -p %s && tar zxvf %s -C %s"
+          remoteDir remoteDir remoteTarPath remoteDir
       copyOp sess = do
         sendFile sess 0o600 tarPath remoteTarPath
         execCommand sess remoteCmd
@@ -325,8 +326,8 @@ implementPrereq logName nodes (GitRepoIn local remoteDir commit) = runExceptT do
   return ()
   where
     withTempDir = bracket (Temp.mkdtemp "/tmp/sshd-repo")
-                  System.Posix.Directory.removeDirectory
-
+                  (\d -> readProcess "rm" ["-rf", d] "")
+--
 implementPrereq logName nodes (RunScript scriptPath) = do
   let rpath = "/tmp" </> (takeFileName scriptPath)
       rcmd = printf "script -qfc \"bash %s\" /tmp/slv.last.%s" rpath logName

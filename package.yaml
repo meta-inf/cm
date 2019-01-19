@@ -28,6 +28,7 @@ dependencies:
 - stm
 - time
 - process
+- template-haskell
 - mtl
 - yaml
 - aeson

@@ -2,37 +2,61 @@
 {-# LANGUAGE DeriveGeneric   #-}
 
 module Task (
-  MasterCommand(..), Task(..), SlaveStatus (SlaveStatus), parseCommand ) where
+  MasterCommand(..), Task(..), SlaveStatus(SlaveStatus),
+  TaskGroup(..), Prerequisite(..), parseCommand ) where
 
 
 import           Data.Aeson
 import           Data.ByteString.Lazy (ByteString, unpack)
 import           Data.String.Conv     (toS)
 import           Data.Text            (Text)
+import           Text.Printf
 import           GHC.Generics
 import           System.Exit          (ExitCode (..))
 import           Utils
 import qualified Data.ByteString.Base64.Lazy as Base64
 
 
+-- met by the server side
+data Prerequisite = SyncData  FilePath FilePath -- local remote
+                  | GitRepoIn FilePath FilePath String -- local remote commit
+                  | RunScript FilePath
+                  deriving (Generic, Show)
+
+
+data TaskGroup = TaskGroup [Prerequisite] String deriving (Generic, Show)
+
+
 data Task = Task
-  { command  :: String
-  , args     :: [String]
-  , workDir  :: FilePath
-  , retryCnt :: Int
+  { taskGroup :: TaskGroup
+  , command   :: String
+  , args      :: [String]
+  , workDir   :: FilePath
+  , retryCnt  :: Int
   } deriving (Generic)
+
+
+instance ToJSON Prerequisite
+
+instance FromJSON Prerequisite
+
+instance ToJSON TaskGroup
+
+instance FromJSON TaskGroup
 
 instance ToJSON Task
 
 instance FromJSON Task
 
 instance Show Task where
-  show (Task cmd args _ rc) = "[" ++ (show rc) ++ "] " ++ cmd ++ (unwords args)
+  show (Task (TaskGroup _ name) cmd args _ rc) =
+    printf "[Task from %s; rc %d] %s (%s)" name rc cmd (unwords args)
 
 
 data MasterCommand = LaunchTask [Task]
                    | ReportStatus
                    | AdjustResLimit Int Int
+                   | InitTaskGroup TaskGroup
                    deriving (Show, Generic)
 
 instance ToJSON MasterCommand
@@ -41,10 +65,10 @@ instance FromJSON MasterCommand
 
 
 data SlaveStatus = SlaveStatus
-  { pendingTasks :: [Task]
+  { pendingTasks   :: [Task]
   , succeededTasks :: [Task]
-  , failedTasks :: [Task]
-  , workers :: [(Int, String)]
+  , failedTasks    :: [Task]
+  , workers        :: [(Int, String)]
   } deriving (Generic)
 
 instance ToJSON SlaveStatus

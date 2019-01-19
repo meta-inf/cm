@@ -151,8 +151,7 @@ reportStatus st = encode $ SlaveStatus (pendingTasks st) (k su) (k fa) th
 
 webApp :: LocalConfig -> Wai.Application
 webApp cfg req _respond = runApp cfg $ do
-  reqBody' <- liftIO $ getBody req C.empty
-  let reqBody = toS reqBody' -- we've gone beyond GHC's capability
+  reqBody <- toS <$> (liftIO $ getBody req C.empty)
   let reqPath = map Text.unpack (Wai.pathInfo req)
 
   $(logTM) InfoS "request received"
@@ -190,9 +189,8 @@ webApp cfg req _respond = runApp cfg $ do
 launchRunner :: IO ()
 launchRunner = do
   store <- newTVarIO initState
-  homePath <- getHomeDirectory
-  let pkp = homePath </> "slave/assets/pub.key"
-  pkey <- read . bStrToString <$> B.readFile pkp
+  pkpath <- getHomeDirectory `for` (</> "slave/assets/pub.key") 
+  pkey <- read . bStrToString <$> B.readFile pkpath
   handleScribe <- K.mkHandleScribe (K.ColorLog True) stdout K.DebugS K.V1
   let mkLogEnv =
         K.registerScribe "stdout" handleScribe K.defaultScribeSettings =<<

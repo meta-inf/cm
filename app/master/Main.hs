@@ -85,8 +85,8 @@ getHomeR = defaultLayout $ do
     yellow = "#bbbb11" :: String
     red    = "#ff1111" :: String
     cpuColor (NodeInfo { nCpus = nc, avgCpuUtil = ac }) = 
-      if | ac > (fromIntegral nc * 0.9) -> red
-         | ac > (fromIntegral nc * 0.5) -> yellow
+      if | ac > 90 -> red
+         | ac > 50 -> yellow
          | otherwise -> green
     diskColor (NodeInfo { freeDisk = fd }) =
       if | fd < 8 -> red

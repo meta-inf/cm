@@ -11,21 +11,21 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.Yaml             as Y
 
 import Utils
+import ShUtils
 
 
-data GpuInfo = GpuInfo Int String Float Float deriving (Show)
+data Node = MkNode
+  { nodeName :: String
+  , hostName :: String
+  , port     :: Integer
+  , userName :: String
+  } deriving (Show)
 
 
-data Node = MkNode { nodeName :: String
-                   , hostName :: String
-                   , port :: Integer
-                   , userName :: String
-                   } deriving (Show)
-
-
-data Credential = MkCredential { publicKey :: String
-                               , privateKey :: String
-                               } deriving (Show)
+data Credential = MkCredential
+  { publicKey  :: String
+  , privateKey :: String
+  } deriving (Show)
 
 
 data MasterConfig = MasterConfig 

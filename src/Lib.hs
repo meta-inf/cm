@@ -43,6 +43,7 @@ import           Text.Read
 
 import App
 import Utils
+import ShUtils
 import Config
 import Task
 
@@ -51,7 +52,7 @@ data QueryStatus = Success | Failure String deriving (Show)
 
 data QueryResult = QueryResult { queryStatus     :: QueryStatus
                                , queryTime       :: TimeStr
-                               , lastSuccessRes  :: [GpuInfo]
+                               , lastSuccessRes  :: NodeInfo
                                , lastSuccessTime :: TimeStr
                                } deriving (Show)
 
@@ -66,6 +67,7 @@ type MasterApp = App MasterMutable MasterConfig
 getClusterState :: MasterApp [(String, QueryResult)]
 getClusterState = clusterState <$> getState
 
+
 mutateClusterState
   :: ([(String, QueryResult)] -> [(String, QueryResult)])
      -> MasterApp ()
@@ -73,23 +75,8 @@ mutateClusterState f = mutateState f1
   where f1 v = v { clusterState = f (clusterState v) }
 
 
-parseNvidiaSMI :: B.ByteString -> [GpuInfo]
-parseNvidiaSMI stdout = [x | Just x <- map fromLine lines]
-  where
-    lines = B.lines stdout
-    fromLine line = do
-      let toks = map B.unpack $ B.split ',' line
-      name <- pure $ toks !! 0
-      id_  <- readMaybe $ toks !! 1
-      fmem <- readMaybe $ toks !! 2
-      util <- readMaybe $ toks !! 3
-      return $ GpuInfo id_ name fmem util
-
-
 execOn
-  :: Node
-  -> (Session -> SimpleSSH a)
-  -> MasterApp (Either SimpleSSHError a)
+  :: Node -> (Session -> SimpleSSH a) -> MasterApp (Either SimpleSSHError a)
 execOn nd action = do
   crd <- asksApp credential
   kh <- asksApp knownHosts
@@ -98,9 +85,8 @@ execOn nd action = do
    in liftIO $ runSimpleSSH app
 
 
-sshResultToEither 
-  :: Either SimpleSSHError SSH.Result
-  -> Either String (String, String)
+sshResultToEither
+  :: Either SimpleSSHError SSH.Result -> Either String (String, String)
 sshResultToEither = \case
   Left se -> Left ("ssh connection error: " ++ show se)
   Right r -> case resultExit r of
@@ -108,18 +94,22 @@ sshResultToEither = \case
                _ -> Left ("remote execution failed: " ++ show r)
 
 
-queryNode :: Node -> MasterApp (Either String [GpuInfo])
-queryNode nd = execOn nd action `for` \case
-    Left err     -> returnErr $ "ssh connection failed: " ++ show err
-    Right result -> 
-      case resultExit result of
-           SSH.ExitSuccess -> Right $ parseNvidiaSMI $ resultOut result
-           _               -> returnErr $ "nvidia-smi failed: " ++ show result
+queryNode :: Node -> MasterApp (Either String NodeInfo)
+queryNode nd = 
+  execOn nd action `for` \case
+    Left se -> Left ("ssh connection error: " ++ show se)
+    Right rs -> 
+      let errs = filter (\r -> resultExit r /= SSH.ExitSuccess) rs
+          outs = map resultOut rs
+       in if not (null errs)
+             then Left ("remote execution failed: " ++ unlines (map show errs))
+             else do
+               let gpus = parseNvidiaSMI . toS $ outs!!0
+               d <- parseDiskUtil .toS $ outs!!1
+               (nCpus, utl) <- parseCpuUtil . toS $ outs!!2
+               pure $ NodeInfo gpus d nCpus utl
   where
-    action = \s -> execCommand s queryCmd
-    returnErr s = Left s
-    queryCmd = "nvidia-smi --query-gpu=name,index,memory.free,utilization.gpu \
-      \--format=csv,nounits,noheader"
+    action s = forM [nvidiaSMICmd, diskUtilCmd, cpuUtilCmd] (execCommand s)
 
 
 queryThread :: Int -> MasterApp ()
@@ -128,14 +118,17 @@ queryThread delay = do
   let maintainSingleNode nd = forever do
         lastResultList <- getClusterState
         let nId = nodeName nd
-            infoFrom res = (lastSuccessTime res, lastSuccessRes res)
-            (rTime, rVal) = infoFrom . fromJust $ lookup nId lastResultList
-        newRes <- queryNode nd
-        cTime <- now
-        let newRes' = case newRes of
-                        Left err  -> QueryResult (Failure err) cTime rVal rTime
-                        Right res -> QueryResult Success       cTime res  cTime
-        mutateClusterState $ \curList -> assocListReplace nId newRes' curList
+            (oldSTime, oldInfo, oldQTime) = 
+              liftM3 (,,) lastSuccessTime lastSuccessRes queryTime . 
+                fromJust $ lookup nId lastResultList
+        nTime <- now
+        newRes <- queryNode nd `for` \case
+          Left err   -> QueryResult (Failure err) nTime oldInfo oldSTime
+          Right info -> 
+            if oldQTime == oldSTime -- last query succeeded
+               then QueryResult Success nTime (mergeInfo oldInfo info) nTime
+               else QueryResult Success nTime info nTime
+        mutateClusterState $ \curList -> assocListReplace nId newRes curList
         delayBy delay
   let msn = runApp world . maintainSingleNode
   nodeList <- asksApp nodes
@@ -148,7 +141,9 @@ initMutable ns =
   MasterMutable { clusterState = [(nodeName nd, def) | nd <- ns]
                 , lastLogs = []
                 }
-  where def = QueryResult (Failure "Empty") defaultTime [] defaultTime
+  where 
+    def = QueryResult (Failure "Empty") defaultTime defaultNodeInfo defaultTime
+    defaultNodeInfo = NodeInfo [] 0.0 1 0.0
 
 
 withInitConfig ::

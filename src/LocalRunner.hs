@@ -29,10 +29,9 @@ import qualified Network.Wai               as Wai
 import qualified Network.Wai.Handler.Warp  as Warp
 
 import           App
-import           Config (GpuInfo (..))
-import           Lib    (parseNvidiaSMI)
 import           Task
 import           Utils
+import           ShUtils
 
 
 type DeviceId = Int

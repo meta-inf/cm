@@ -60,6 +60,7 @@ default-extensions:
 - FlexibleContexts
 - GeneralizedNewtypeDeriving
 - BlockArguments
+- ConstraintKinds
 
 _exe-ghc-options: &exe-ghc-options
 - -threaded

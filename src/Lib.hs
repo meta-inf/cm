@@ -75,8 +75,9 @@ mutateClusterState f = mutateState f1
   where f1 v = v { clusterState = f (clusterState v) }
 
 
-execOn
-  :: Node -> (Session -> SimpleSSH a) -> MasterApp (Either SimpleSSHError a)
+execOn ::
+  MonadApp m v MasterConfig =>
+  Node -> (Session -> SimpleSSH a) -> m (Either SimpleSSHError a)
 execOn nd action = do
   crd <- asksApp credential
   kh <- asksApp knownHosts
@@ -128,7 +129,7 @@ queryThread delay = do
             if oldQTime == oldSTime -- last query succeeded
                then QueryResult Success nTime (mergeInfo oldInfo info) nTime
                else QueryResult Success nTime info nTime
-        mutateClusterState $ \curList -> assocListReplace nId newRes curList
+        mutateClusterState \curList -> assocListReplace nId newRes curList
         delayBy delay
   let msn = runApp world . maintainSingleNode
   nodeList <- asksApp nodes
@@ -161,7 +162,7 @@ withInitConfig cpath k = do
         K.initLogEnv "Master" "devel" >>=
         K.registerScribe "stdout" stdoutScribe K.defaultScribeSettings >>=
         K.registerScribe "webp" myScribe K.defaultScribeSettings
-  bracket mkLogEnv K.closeScribes $ \le -> 
+  bracket mkLogEnv K.closeScribes \le -> 
     let args = (initConfig le storage cfg, storage)
      in k args
   where
@@ -191,11 +192,12 @@ data SlaveCheckResult = OutdatedSlaveRunning
                       deriving (Show)
 
 
-checkIfSlaveOn :: Node -> MasterApp SlaveCheckResult
+checkIfSlaveOn ::
+  MonadApp m v MasterConfig => Node -> m SlaveCheckResult
 checkIfSlaveOn nd = do
   lhr <- liftIO (readProcess "sha1sum" [local_path] "")
   let localHash = head (words lhr)
-  sshret <- execOn nd $ \sess -> do
+  sshret <- execOn nd \sess -> do
     r1 <- execCommand sess (
       printf "sha1sum %s || echo \"nothing forsplit\"" remote_path)
     r2 <- execCommand sess ("ps -ux | grep -v grep | grep " ++ slave_name)
@@ -237,10 +239,9 @@ checkIfSlaveOn nd = do
     remote_path = "slave/" ++ slave_name
 
 
-dispatchCommandTo 
-  :: Node
-  -> MasterCommand
-  -> MasterApp (Either String Text)
+dispatchCommandTo ::
+  MonadApp m v MasterConfig =>
+  Node -> MasterCommand -> m (Either String Text)
 dispatchCommandTo nd mc = do
   pkpath <- asksApp signPKey
   pkey <- read . toS <$> liftIO (B.readFile pkpath)
@@ -249,18 +250,18 @@ dispatchCommandTo nd mc = do
     sig <- withExceptT show (liftEither $ RSA.sign pkey cmdstr)
     let sig' = Base64.encode sig
         tosend = Aeson.encode (toS cmdstr :: Text, toS sig' :: Text)
-    rsp <- Exc.lift $ checkIfSlaveOn nd
+    rsp <- checkIfSlaveOn nd
     port <- case rsp of
       CheckSuccess p -> pure p
       _ -> throwError (show rsp)
     cmdpath <- liftIO $ putInTemp tosend
-    r1 <- doSSH nd $ \s -> do
+    r1 <- doSSH nd \s -> do
       sendFile s 0o600 cmdpath "/tmp/last.cmd.txt"
       execCommand s (curl port)
     return (toS r1)
   where
     doSSH nd cmd = do
-      rraw <- Exc.lift (execOn nd cmd)
+      rraw <- execOn nd cmd
       r <- withExceptT show (Exc.liftEither rraw)
       case resultExit r of
         SSH.ExitSuccess -> pure (resultOut r)
@@ -277,11 +278,12 @@ dispatchCommandTo nd mc = do
         _               -> Left $ "execution failed on slave: " ++ show r
 
 
-implementPrereq 
-  :: String -> [Node] -> Prerequisite -> MasterApp (Either String ())
+implementPrereq ::
+  MonadApp m v MasterConfig =>
+  String -> [Node] -> Prerequisite -> m (Either String ())
 implementPrereq logName nodes (SyncData local remote) = runExceptT do
-  pubkey <- Exc.lift $ asksApp credential `for` publicKey
-  rlst <- liftIO $ forM nodes $ \nd ->
+  pubkey <- asksApp credential `for` publicKey
+  rlst <- liftIO $ forM nodes \nd ->
     let sshcmd = printf "\"ssh -i %s -p %d\"" pubkey (port nd)
         rpath = printf "%s@%s" (userName nd) (hostName nd)
      in readProcessWithExitCode "rsync" ["-e", sshcmd, "-avv", local, rpath] ""
@@ -294,7 +296,7 @@ implementPrereq logName nodes (SyncData local remote) = runExceptT do
 --
 implementPrereq logName nodes (GitRepoIn local remoteDir commit) = runExceptT do
   -- tar our repo
-  let tarOp = withTempDir $ \dirp -> do
+  let tarOp = withTempDir \dirp -> do
         readProcess "git" ["clone", local, dirp] ""
         (tgzp, h) <- Temp.mkstemps "/tmp/sshd-repo" ".tgz"
         hClose h
@@ -314,8 +316,8 @@ implementPrereq logName nodes (GitRepoIn local remoteDir commit) = runExceptT do
       copyOp sess = do
         sendFile sess 0o600 tarPath remoteTarPath
         execCommand sess remoteCmd
-  w <- Exc.lift askWorld
-  rm <- (liftIO . forConcurrently nodes) $ \d -> runApp w (execOn d copyOp)
+  w <- askWorld
+  rm <- (liftIO . forConcurrently nodes) \d -> runApp w (execOn d copyOp)
   let errs = lefts $ map sshResultToEither rm
   when (not (null errs)) $ throwError (unlines errs)
   return ()
@@ -330,26 +332,26 @@ implementPrereq logName nodes (RunScript scriptPath) = do
         sendFile sess 0o600 scriptPath rpath
         execCommand sess rcmd
   w <- askWorld
-  r <- (liftIO . forConcurrently nodes) $ \d -> runApp w (execOn d remoteOp)
+  r <- (liftIO . forConcurrently nodes) \d -> runApp w (execOn d remoteOp)
   let errs = lefts $ map sshResultToEither r
   return if (not (null errs)) then Left (unlines errs) else Right ()
 
 
 -- |name of the taskGroup must be unique
-launchTaskGroup :: TaskGroup -> [Task] -> [Node] -> MasterApp (Either String ())
+launchTaskGroup ::
+  TaskGroup -> [Task] -> [Node] -> MasterApp (Either String ())
 launchTaskGroup tg ts nodes = runExceptT do
   let (TaskGroup preqs name) = tg
   -- 
-  errs <- lefts <$> (Exc.lift $ mapM (implementPrereq name nodes) preqs)
+  errs <- lefts <$> (mapM (implementPrereq name nodes) preqs)
   when (not (null errs)) $
     throwError ("cannot implement prereqs: " ++ unlines errs)
   -- 
-  errs <- lefts <$> (
-    Exc.lift $ mapM (flip dispatchCommandTo (ReportStatus)) nodes)
+  errs <- lefts <$> (mapM (flip dispatchCommandTo (ReportStatus)) nodes)
   when (not (null errs)) $
     throwError ("communication failure: " ++ unlines errs)
   -- 
-  rs <- Exc.lift $ mapM (flip dispatchCommandTo (LaunchTask ts)) nodes
+  rs <- mapM (flip dispatchCommandTo (LaunchTask ts)) nodes
   let errs = lefts rs
   when (not (null errs)) $
     throwError ("dispatch command failure: " ++ unlines errs)

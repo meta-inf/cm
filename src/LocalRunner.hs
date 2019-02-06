@@ -67,7 +67,7 @@ runnerThread devId workerId =
   where
     loop = do
       -- fetch next task
-      nextTask <- liftSTM $ \storage -> do
+      nextTask <- liftSTM \storage -> do
         st <- readTVar storage
         let plist = pendingTasks st
         if null plist
@@ -82,7 +82,7 @@ runnerThread devId workerId =
           $(logTM) InfoS ("Launching task " <> showLS t)
           exc <- execTask t devId
           $(logTM) InfoS ("Task finished, exit code " <> showLS exc)
-          mutateState $ \st -> newState st t exc
+          mutateState \st -> newState st t exc
     -- 
     newState st t exitCode =
       let State{completedTasks=ct, pendingTasks=pt} = st
@@ -115,14 +115,14 @@ adjustResLimit nDev nWorkerPerDev = do
   -- Truncate nWorkerPerDev
   workers <- forM workers $ truncateThreads nWorkerPerDev
   -- Extend worker pools corresponding to existing GPUs
-  oldWorkers <- forM workers $ \(d, ws) -> do
+  oldWorkers <- forM workers \(d, ws) -> do
     let wid = foldr max 0 (map fst ws)
     nth <- newThreadList d [wid + 1 .. wid + (nWorkerPerDev - length ws)]
     return (d, ws ++ nth)
   -- Deploy workers on extra devs
   extraDevs <- findGPUs (nDev - length workers)
   $(logTM) K.DebugS ("New workers will go to " <> showLS extraDevs)
-  newWorkers <- forM extraDevs $ \d -> do
+  newWorkers <- forM extraDevs \d -> do
     nth <- newThreadList d [1..nWorkerPerDev]
     return (d, nth)
   -- Log changes
@@ -134,7 +134,7 @@ adjustResLimit nDev nWorkerPerDev = do
     truncateThreads nKeep (devId, tList) = do
       forM (drop nKeep tList) (liftIO . killThread . snd)
       return (devId, take nKeep tList)
-    newThreadList devId workerIdRange = forM workerIdRange $ \wId -> do
+    newThreadList devId workerIdRange = forM workerIdRange \wId -> do
       action <- toIO $ runnerThread devId wId
       tId <- liftIO (forkIO action)
       return (wId, tId)
@@ -194,7 +194,7 @@ launchRunner = do
   let mkLogEnv =
         K.registerScribe "stdout" handleScribe K.defaultScribeSettings =<<
           K.initLogEnv "LocalRunner" "devel"
-  bracket mkLogEnv K.closeScribes $ \le -> 
+  bracket mkLogEnv K.closeScribes \le -> 
     Warp.run 3333 $ webApp (initConfig le store pkey)
   where
     initState = State { workerIds = []

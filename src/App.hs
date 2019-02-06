@@ -1,5 +1,6 @@
 module App 
-  ( AppConfig (AppConfig), App, askWorld, runApp, toIO, liftSTM,
+  ( module Control.Monad.Reader,
+    AppConfig (AppConfig), App, MonadApp, askWorld, runApp, toIO, liftSTM,
     getState, mutateState, askApp, asksApp, initConfig
   ) where
 
@@ -14,23 +15,28 @@ import qualified Katip       as K
 import Utils
 
 
-data AppConfig a b = AppConfig 
-  { storage :: TVar a
+data AppConfig vola const = AppConfig 
+  { storage :: TVar vola
   , logNamespace :: K.Namespace
   , logContext :: K.LogContexts
   , logEnv :: K.LogEnv
-  , config :: b
+  , config :: const
   }
 
-newtype App t0 t1 a = App { unApp :: ReaderT (AppConfig t0 t1) IO a }
-  deriving (Applicative, Functor, Monad, MonadIO, MonadReader (AppConfig t0 t1))
 
-instance K.Katip (App t0 t1) where
+newtype App vola const a = App 
+  { unApp :: ReaderT (AppConfig vola const) IO a }
+  deriving (Applicative, Functor, Monad, MonadIO,
+            MonadReader (AppConfig vola const))
+
+
+instance K.Katip (App v c) where
   getLogEnv = asks logEnv
   localLogEnv f (App m) =
     App (local (\s -> s { logEnv = f (logEnv s)}) m)
 
-instance K.KatipContext (App t0 t1) where
+
+instance K.KatipContext (App v c) where
   getKatipContext = asks logContext
   localKatipContext f (App m) =
     App (local (\s -> s { logContext = f (logContext s)}) m)
@@ -39,43 +45,46 @@ instance K.KatipContext (App t0 t1) where
     App (local (\s -> s { logNamespace = f (logNamespace s)}) m)
 
 
-runApp :: AppConfig t0 t1 -> App t0 t1 a -> IO a
+type MonadApp m v c = (MonadReader (AppConfig v c) m, MonadIO m)
+
+
+runApp :: AppConfig v c -> App v c a -> IO a
 runApp c k = runReaderT (unApp k) c
 
 
-askWorld :: App t0 t1 (AppConfig t0 t1)
+askWorld :: MonadReader (AppConfig v c) m => m (AppConfig v c)
 askWorld = ask
 
 
-toIO :: App t0 t1 a -> App t0 t1 (IO a)
+toIO :: App v c a -> App v c (IO a)
 toIO k = askWorld `for` \c -> runApp c k
 
 
-liftSTM :: (TVar t0 -> STM a) -> App t0 t1 a
+liftSTM :: MonadApp m v c => (TVar v -> STM v') -> m v'
 liftSTM fn = do
   storage <- asks storage
   liftIO $ atomically (fn storage)
 
 
-getState :: App t0 t1 t0
+getState :: MonadApp m v c => m v
 getState = liftSTM readTVar
 
 
-mutateState :: (t0 -> t0) -> App t0 t1 ()
+mutateState :: MonadApp m v c => (v -> v) -> m ()
 mutateState fn = liftSTM $ \storage -> do
   st <- readTVar storage
   writeTVar storage (fn st)
 
 
-askApp :: App t0 t1 t1
+askApp :: MonadApp m v c => m c
 askApp = asks config
 
 
-asksApp :: (t1 -> t2) -> App t0 t1 t2
+asksApp :: MonadApp m v c => (c -> b) -> m b
 asksApp sel = asks config `for` sel
 
 
-initConfig :: K.LogEnv -> TVar a -> b -> AppConfig a b
+initConfig :: K.LogEnv -> TVar v -> c -> AppConfig v c
 initConfig le st cfg = AppConfig { logEnv = le
                                  , logContext = mempty
                                  , logNamespace = Data.Monoid.mempty
